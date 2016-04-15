@@ -25,10 +25,12 @@ static int64_t ticks;
 //Cecils additions
 static struct list suspension_list;
 
+
+
 struct susp_elem{
      struct list_elem elem;
      struct thread* thr;
-     enum thread_status init_status;
+     //enum thread_status init_status;
      int64_t wake_ctr;//the count till the thread wakes up.
 };
 
@@ -45,18 +47,47 @@ static void real_time_delay (int64_t num, int32_t denom);
 
 //cecils additions
 static void suspension_tick (void);
-static void suspension_enque(struct thread* thr, int64_t count_till_wake);
-static void suspension_deque(void);
+static void suspension_enque(int64_t count_till_wake);
 static void 
 suspension_remove(struct list_elem* item);
+static bool suspension_less( const struct list_elem *a,
+                             const struct list_elem *b,
+                             void *aux);
+                             
+
+static bool suspension_less( const struct list_elem *a,
+                             const struct list_elem *b,
+                             void *aux){
+     bool r = ((struct susp_elem*)a)->wake_ctr < ((struct susp_elem*)b)->wake_ctr;                              
+     return r;
+     }                            
+
+//alternate attempt
+/*
+ Assume there is at most one reference to one thread being called at any given time.
+ Assume that alt_tick is called during the timer interrupt.
+ */
+static struct list alt_list;
+static struct list alt_garbage_list;
+static void alt_enque(int64_t wake_t);
+static void alt_remove(struct list_elem* iter);
+static void alt_tick(void);
+static void alt_tick_garbage(void);
+
+
+//static void suspension_deque(void); rem
 //Cecils additions
 
 static void 
 suspension_remove(struct list_elem* item)
 {
-     list_remove(item);
+     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
+     
      thread_unblock(((struct susp_elem*)item)->thr);
+     //((struct susp_elem*)item)->thr->status = ((struct susp_elem*)item)->init_status;//reset the threads      
      ((struct susp_elem*)item)->thr = NULL;//prevent the thread from being deleted
+     list_remove(item);
+     
      /*
       Call any other code to make the thread usable again, like pushing the thread back onto the running queue if it is removed.
       */    
@@ -64,68 +95,143 @@ suspension_remove(struct list_elem* item)
      item->prev = NULL;//prevent the previous list element from being deleted.
      free( ( void *)item );//free the list
      item = NULL;
+     intr_set_level (old_level);//Re enable interrupts so you can block the thread.
+
+}
+
+static void 
+alt_remove(struct list_elem* item)
+{
+     //set the current thread of element to null, put the list onto the garbage collection list.
+     struct susp_elem* e = list_entry( item, struct susp_elem, elem);
+     e->thr = NULL;
+     list_remove(item);
+     list_push_front(&alt_garbage_list, &(e->elem));
+     e = NULL;
+     item = NULL;
+}
+
+static void
+alt_tick_garbage(void){
+     if( list_empty(&alt_garbage_list) ){
+          return;
+     }          
+     //if it is then declare data elements
+     
+     struct list_elem *iter = list_front(&alt_list);
+     struct susp_elem *entry;
+     //traverse the list
+     while( iter != list_end(&alt_list) ){                
+                entry = list_entry(iter, struct susp_elem, elem);//get the entry
+                iter = list_remove(iter);
+                free( (void*) entry);
+          }
+     if( !list_empty(&alt_garbage_list) ){
+          printf("Rewrite as single command");
+          entry = list_entry( list_front(&alt_list), struct susp_elem, elem);
+          list_remove( list_front(&alt_list) );
+          free(entry);
+     }
 }
 
 static void 
 suspension_tick(void)
 {
+     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
      
-     if (list_empty(&suspension_list)){
+     if (list_empty(&suspension_list) != 0){
+          //printf("Here");
+          intr_set_level (old_level);//Re enable interrupts so you can block the thread.
           return;//list has no length, return.
      }
+     ASSERT(0==2);//insanity check
 
      struct list_elem * iter ;
      //for each element in list
      for(iter= list_front(&suspension_list); iter != list_end(&suspension_list);
-         iter = list_next( iter) )
+         iter = list_next( iter ) )
      {
           ((struct susp_elem*)iter)->wake_ctr-=1;//reduce the wake counter by one
+          //printf("%i\n",  ((struct susp_elem*)iter)->wake_ctr);
           //if it is zero, then remove it from the suspension list and re awaken it.
-          if (((struct susp_elem*)iter)->wake_ctr==0){
-               suspension_remove(iter);
-               
-          }else{
-               //if the thread is the current thread,
-               //and the thread status is not blocked.
-               //then block the thread.
-               if( ((struct susp_elem*)iter)->thr == thread_current() && 
-                    ( ((struct susp_elem*)iter)->thr->status != THREAD_BLOCKED){
-                         thread_block();
-               }
+          if (
+               ((struct susp_elem*)iter)->wake_ctr<=0
+          ){
+               iter = iter->prev;
+               suspension_remove(iter->next);
           }
      }
-}
-
-static void 
-suspension_deque(void)
-{
-     struct list_elem* item = list_pop_front(&suspension_list);
-     thread_unblock(((struct susp_elem*)item)->thr);
-     ((struct susp_elem*)item)->thr = NULL;//prevent the thread from being deleted
-     /*
-      Call any other code to make the thread usable again, like pushing the thread back onto the running queue if it is removed.
-      */
      
-     item->next = NULL;//prevent the next list element from being deleted.
-     item->prev = NULL;//prevent the previous list element from being deleted.
-     free( ( void *)item );//free the list
-     item = NULL;
+     iter = NULL;
+     intr_set_level (old_level);//Re enable interrupts so you can block the thread.
 }
 
-int64_t get_wake_time( list_elem* susp_node){
-     return ((struct susp_elem*) susp_node)->wake_ctr;
+static void alt_tick(void){
+//     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
+     //ensure the list is empty
+     if( list_empty(&alt_list) ){
+          
+          //intr_set_level (old_level);//Re enable interrupts
+          return;
+     }          
+     //if it is then declare data elements
+     
+     struct list_elem *iter = list_front(&alt_list);
+     struct susp_elem *entry;
+     //traverse the list
+     while( iter != list_end(&alt_list) ){                
+                entry = list_entry(iter, struct susp_elem, elem);//get the entry
+                if (entry->wake_ctr <= timer_ticks() ){
+                     alt_remove( iter );//remove the previously visited item.
+                     if (!list_empty(&alt_list) )
+                         {
+                              iter = list_front(&alt_list);//reset the list after removing the iterator.
+                         }
+                         else{
+                              return;
+                         }
+                     //since the list is in sorted order from min->max, this works
+                }else{
+                     iter = list_end(&alt_list);//done iterating, end the loop.
+                }
+          }
+//     intr_set_level(old_level);//Re-enable interrupts.
 }
 
-static void suspension_enque (int64_t wake_ctr){
+static void suspension_enque (int64_t wake_t){
+     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
+     //generate a new suspension element.
      struct susp_elem* new_elem = (struct susp_elem*) malloc( sizeof(struct susp_elem));
      ASSERT( new_elem != NULL);
-     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
-     new_elem->wake_ctr = wake_ctr;
+     //assign the wake timer.
+     new_elem->wake_ctr = wake_t;
+     //assign the thread from thread current.
      new_elem->thr = thread_current();
+     //new_elem->init_status = thread_current()->status;//record the initial status of the thread.
      thread_block();//make it so that the thread does not run on the cpu.
-     list_push_front(&suspension_list, (struct list_elem*)&new_elem);
+     //ASSERT(0==1);// -> insanity check fails here. 
+     list_push_front(&suspension_list, &new_elem->elem);
      new_elem = NULL;
      intr_set_level (old_level);//Re enable interrupts so you can block the thread.
+     ASSERT( !list_empty(&suspension_list) );
+}
+
+static void alt_enque (int64_t wake_t){
+     enum intr_level old_level = intr_disable ();//Disable interrupts so you can block the thread.
+     //generate a new suspension element.
+     struct susp_elem* new_elem = (struct susp_elem*) malloc( sizeof(struct susp_elem));
+     ASSERT( new_elem != NULL);
+     //assign the wake timer.
+     new_elem->wake_ctr =  wake_t + timer_ticks();
+     //assign the thread from thread current.
+     new_elem->thr = thread_current();
+     //thread_block();//block it.
+     //new_elem->init_status = thread_current()->status;//record the initial status of the thread.
+     //printf("HERE");
+     list_insert_ordered( &alt_list, &(new_elem->elem), &suspension_less, NULL);
+     new_elem = NULL;
+     intr_set_level (old_level);//Re enable interrupts so you can block the thread.
+     //printf("CALLED");
 }
 
 /*
@@ -161,6 +267,8 @@ void
 timer_init (void) 
 {
   list_init( &suspension_list);//initialize suspension list.
+  list_init( &alt_list);
+  list_init( &alt_garbage_list);
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
 }
@@ -216,12 +324,15 @@ void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
+  if( ticks < 0){ return ;}
 
   ASSERT (intr_get_level () == INTR_ON);
-  thread_enque( , ticks);
+  //suspension_enque(ticks);
+  alt_enque(ticks);
   
   while (timer_elapsed (start) < ticks) 
     thread_yield ();
+  
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -293,14 +404,15 @@ timer_print_stats (void)
 {
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
 }
-
+// 
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
-  suspension_tick();
+  alt_tick();
+  alt_tick_garbage();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
