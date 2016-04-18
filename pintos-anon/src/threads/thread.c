@@ -341,7 +341,7 @@ void
 thread_set_priority (int new_priority) 
 {
        enum intr_level old_level = intr_disable();
-  thread_current ()->priority = new_priority;
+       thread_current ()->priority = new_priority;
        intr_set_level(old_level);  
 }
 
@@ -479,6 +479,7 @@ init_thread (struct thread *t, const char *name, int priority)
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
 }
+
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
    returns a pointer to the frame's base. */
