@@ -101,6 +101,7 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  initial_thread->wake_tm = 0;
 }
 
 /* Starts preemptive thread scheduling by enabling interrupts.
@@ -242,6 +243,7 @@ thread_unblock (struct thread *t)
   ASSERT (t->status == THREAD_BLOCKED);
   list_push_back (&ready_list, &t->elem);
   t->status = THREAD_READY;
+  t->wake_tm = 0;
   intr_set_level (old_level);
 }
 
@@ -338,15 +340,21 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
+       enum intr_level old_level = intr_disable();
   thread_current ()->priority = new_priority;
+       intr_set_level(old_level);  
 }
 
 /* Returns the current thread's priority. */
 int
 thread_get_priority (void) 
 {
-  return thread_current ()->priority;
+     enum intr_level old_level = intr_disable();
+     int r = thread_current()->priority;
+     intr_set_level(old_level);  
+     return r;
 }
+
 
 /* Sets the current thread's nice value to NICE. */
 void
@@ -459,7 +467,7 @@ init_thread (struct thread *t, const char *name, int priority)
   ASSERT (t != NULL);
   ASSERT (PRI_MIN <= priority && priority <= PRI_MAX);
   ASSERT (name != NULL);
-
+     t->wake_tm = 0;//set the sleep time to zero.
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
   strlcpy (t->name, name, sizeof t->name);

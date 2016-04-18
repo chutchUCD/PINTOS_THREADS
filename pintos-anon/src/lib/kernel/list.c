@@ -1,5 +1,6 @@
 #include "list.h"
 #include "../debug.h"
+#include <stdio.h>
 
 /* Our doubly linked lists have two header elements: the "head"
    just before the first element and the "tail" just after the
@@ -299,7 +300,7 @@ list_size (struct list *list)
 {
   struct list_elem *e;
   size_t cnt = 0;
-
+     //if(list_empty(list)){return 0;}
   for (e = list_begin (list); e != list_end (list); e = list_next (e))
     cnt++;
   return cnt;
@@ -453,8 +454,11 @@ list_insert_ordered (struct list *list, struct list_elem *elem,
   ASSERT (less != NULL);
 
   for (e = list_begin (list); e != list_end (list); e = list_next (e))
-    if (less (elem, e, aux))
-      break;
+  {
+       if (less (elem, e, aux))
+          break;
+       
+}
   return list_insert (e, elem);
 }
 
